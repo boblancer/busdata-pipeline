@@ -12,10 +12,10 @@ import datetime
 from google.cloud import pubsub_v1
 
 # Configuration - these can be imported from a config file or set directly
-PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "your-project-id")
+PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "dataeng-456707")
 PUBSUB_TOPIC = "breadcrumb-data-topic"
 API_BASE_URL = "https://busdata.cs.pdx.edu/api/getBreadCrumbs"
-OUTPUT_DIR = "/opt/busdata/raw_data"
+OUTPUT_DIR = "./busdata/raw_data"
 
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
