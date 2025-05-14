@@ -129,8 +129,34 @@ def main():
         subscriber.close()
         logger.info("Subscriber client closed.")
 
+        logger.info(f"Starting transformation for {date_str}...")
+
+        try:
+            # Import the transform module
+            import transform
+            
+            # Run the transformation
+            transform.main(date_str, logger)
+            
+            logger.info(f"Transformation completed for {date_str}")
+        except Exception as e:
+            logger.error(f"Error during transformation for {date_str}: {e}", exc_info=True)
+
 if __name__ == "__main__":
     try:
         main()
     except Exception as e:
         logger.critical(f"Unhandled exception in main function: {e}", exc_info=True)
+    finally:
+        logger.info(f"Starting transformation for {date_str}...")
+
+        try:
+            # Import the transform module
+            import transform
+            
+            # Run the transformation
+            transform.main(date_str, logger)
+            
+            logger.info(f"Transformation completed for {date_str}")
+        except Exception as e:
+            logger.error(f"Error during transformation for {date_str}: {e}", exc_info=True)
