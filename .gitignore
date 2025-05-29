@@ -1,0 +1,17 @@
+# IDE files
+.idea/
+
+# Python cache files
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Data directory
+busdata/
+
+# Log files
+*.log
+
+# Environment files
+.env
