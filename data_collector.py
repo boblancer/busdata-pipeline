@@ -20,6 +20,14 @@ from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.publisher.futures import Future as PublishFuture
 from typing import List, Dict, Any, Optional, Tuple
 
+# Import HTML parsing functions
+try:
+    from stop_html_parser import parse_stop_events_html, validate_stop_event_record, format_stop_event_for_output
+    HTML_PARSER_AVAILABLE = True
+except ImportError:
+    HTML_PARSER_AVAILABLE = False
+    logging.warning("HTML parser module not available - stop events parsing will be disabled")
+
 # Set up logging configuration
 logging.basicConfig(
     level=logging.INFO,
@@ -108,7 +116,31 @@ def fetch_data(entity_id: str, config: Dict[str, Any]) -> Optional[List[Dict[str
     try:
         logger.info(f"Fetching {config['data_type']} data for {config['id_param']} {entity_id}...")
         with urllib.request.urlopen(url) as response:
-            data = json.loads(response.read())
+            content = response.read().decode('utf-8')
+            
+            # Handle different response formats
+            if config.get('response_format') == 'html':
+                # Parse HTML table format for stop events
+                if not HTML_PARSER_AVAILABLE:
+                    logger.error("HTML parser not available - cannot process stop events data")
+                    return None
+                
+                data = parse_stop_events_html(content, entity_id)
+                
+                # Validate and format the parsed data
+                validated_data = []
+                for record in data:
+                    if validate_stop_event_record(record):
+                        formatted_record = format_stop_event_for_output(record)
+                        validated_data.append(formatted_record)
+                    else:
+                        logger.warning(f"Skipping invalid stop event record for vehicle {entity_id}")
+                
+                data = validated_data
+            else:
+                # Parse JSON format for breadcrumbs
+                data = json.loads(content)
+            
             logger.info(f"Received {len(data)} records for {config['id_param']} {entity_id}")
             return data
     except Exception as e:

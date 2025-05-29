@@ -14,11 +14,11 @@ import sys
 
 # Database connection parameters
 db_params = {
-    'database': 'busdata',
-    'user': 'postgres',
-    'password': 'Cloud410!',
-    'host': '10.116.4.3',
-    'port': '5432'
+    'database': os.getenv('DB_NAME', 'busdata'),
+    'user': os.getenv('DB_USER', 'postgres'),
+    'password': os.getenv('DB_PASSWORD', 'Cloud410!'),
+    'host': os.getenv('DB_HOST', '10.116.4.3'),
+    'port': int(os.getenv('DB_PORT', '5432'))
 }
 
 # Function to parse OPD_DATE and ACT_TIME into a timestamp
