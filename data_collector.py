@@ -352,8 +352,17 @@ def main() -> None:
         type=int,
         help='Limit the number of entities to process (for testing)'
     )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug logging for detailed troubleshooting'
+    )
     
     args = parser.parse_args()
+    
+    # Enable debug logging if requested
+    if args.debug:
+        logging.getLogger('bus_data_collector').setLevel(logging.DEBUG)
     
     start_time = datetime.datetime.now()
     logger.info(f"Starting {args.data_type} data collection at {start_time}")
@@ -378,6 +387,8 @@ def main() -> None:
     total_published = 0
     total_errors = 0
     successful_entities = 0
+    no_data_count = 0
+    fetch_error_count = 0
     
     # Process entities in parallel using ThreadPoolExecutor
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
@@ -391,11 +402,17 @@ def main() -> None:
                 _, published_count, error_count = future.result()
                 total_published += published_count
                 total_errors += error_count
+                
                 if published_count > 0:
                     successful_entities += 1
+                elif error_count > 0:
+                    fetch_error_count += 1
+                else:
+                    no_data_count += 1
             except Exception as e:
                 logger.error(f"Error processing {config['id_param']} {entity_id}: {e}")
                 total_errors += 1
+                fetch_error_count += 1
     
     end_time = datetime.datetime.now()
     duration = (end_time - start_time).total_seconds()
@@ -404,12 +421,23 @@ def main() -> None:
     logger.info(f"Total published: {total_published}, Total errors: {total_errors}")
     logger.info(f"Successful entities: {successful_entities}/{len(entity_ids)}")
     
-    # Provide summary of why messages weren't published
-    no_data_entities = len(entity_ids) - successful_entities - total_errors
-    if no_data_entities > 0:
-        logger.info(f"Entities with no data to publish: {no_data_entities} (likely inactive vehicles or 404 responses)")
-    if total_errors > 0:
-        logger.info(f"Entities with fetch errors: {total_errors} (network issues, API errors, etc.)")
+    # Simple breakdown of results
+    logger.info(f"Results breakdown:")
+    logger.info(f"  - Entities with data: {successful_entities}")
+    logger.info(f"  - Entities with no data (404s): {no_data_count}")
+    logger.info(f"  - Entities with errors: {fetch_error_count}")
+    
+    # If nothing published, explain why
+    if total_published == 0:
+        logger.warning("⚠️  ZERO RECORDS PUBLISHED!")
+        if no_data_count == len(entity_ids):
+            logger.warning("   Reason: ALL vehicle IDs returned 404 (no data found)")
+            logger.warning("   This means: Vehicles are inactive or don't exist")
+        elif fetch_error_count > 0:
+            logger.warning(f"   Reason: {fetch_error_count} entities had network/API errors")
+        
+        logger.warning("   Quick fix: Try running with --data-type breadcrumb instead")
+        logger.warning(f"   Test manually: curl '{config['api_url']}?{config['id_param']}=2909'")
 
 if __name__ == "__main__":
     main()
