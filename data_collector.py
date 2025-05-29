@@ -11,14 +11,24 @@ Uses concurrent.futures for parallel processing to improve performance.
 import os
 import json
 import urllib.request
+import urllib.error
 import datetime
 import logging
 import traceback
 import argparse
 import concurrent.futures
+import time
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.publisher.futures import Future as PublishFuture
 from typing import List, Dict, Any, Optional, Tuple
+
+# Import HTML parsing functions
+try:
+    from stop_html_parser import parse_stop_events_html, validate_stop_event_record, format_stop_event_for_output
+    HTML_PARSER_AVAILABLE = True
+except ImportError:
+    HTML_PARSER_AVAILABLE = False
+    logging.warning("HTML parser module not available - stop events parsing will be disabled")
 
 # Set up logging configuration
 logging.basicConfig(
@@ -34,8 +44,9 @@ logger = logging.getLogger('bus_data_collector')
 # Base configuration
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "dataeng-456707")
 OUTPUT_DIR = "./busdata/raw_data"
-MAX_WORKERS = 10  # Maximum number of parallel workers for processing
+MAX_WORKERS = 5  # Reduced to be gentler on the API
 PUBSUB_BATCH_SIZE = 100  # Number of messages to publish in batch
+REQUEST_DELAY = 0.1  # Small delay between requests to avoid overwhelming the API
 
 # Data collection configurations
 DATA_COLLECTION_CONFIGS = {
@@ -44,14 +55,16 @@ DATA_COLLECTION_CONFIGS = {
         "pubsub_topic": "breadcrumb-data-topic",
         "use_vehicle_ids": True,
         "id_param": "vehicle_id",
-        "data_type": "breadcrumb"
+        "data_type": "breadcrumb",
+        "response_format": "json"
     },
     "stopevents": {
         "api_url": "https://busdata.cs.pdx.edu/api/getStopEvents",
-        "pubsub_topic": "stop-events-topic",
-        "use_vehicle_ids": True,  # Can be changed to False if stop events use different IDs
-        "id_param": "vehicle_id",  # Change to "stop_id" if needed
-        "data_type": "stopevents"
+        "pubsub_topic": "stop-data-topic",
+        "use_vehicle_ids": True,
+        "id_param": "vehicle_num",
+        "data_type": "stopevents",
+        "response_format": "html"  # Assuming stop events return HTML
     }
 }
 
@@ -81,7 +94,7 @@ def read_vehicle_ids() -> List[str]:
     except Exception as e:
         logger.error(f"Error reading vehicle IDs from file: {e}")
         # Return some default IDs as fallback
-        return ["VEHICLE_ID_1", "VEHICLE_ID_2", "VEHICLE_ID_3"]
+        return ["2909", "2913", "2916"]  # Use actual vehicle IDs from your log
 
 def read_stop_ids() -> List[str]:
     """Read stop IDs from stops.txt file (if it exists)."""
@@ -101,18 +114,105 @@ def get_ids_for_data_type(data_type: str, config: Dict[str, Any]) -> List[str]:
     else:
         return read_vehicle_ids()
 
+def test_api_endpoint(config: Dict[str, Any]) -> bool:
+    """Test if the API endpoint is accessible."""
+    test_url = config['api_url']
+    try:
+        logger.info(f"Testing API endpoint: {test_url}")
+        
+        # Create a request with proper headers
+        req = urllib.request.Request(test_url)
+        req.add_header('User-Agent', 'Mozilla/5.0 (compatible; bus-data-collector/1.0)')
+        
+        with urllib.request.urlopen(req, timeout=10) as response:
+            status_code = response.getcode()
+            logger.info(f"API endpoint test successful. Status code: {status_code}")
+            return True
+    except urllib.error.HTTPError as e:
+        logger.error(f"HTTP Error testing API endpoint: {e.code} - {e.reason}")
+        return False
+    except urllib.error.URLError as e:
+        logger.error(f"URL Error testing API endpoint: {e.reason}")
+        return False
+    except Exception as e:
+        logger.error(f"Unexpected error testing API endpoint: {e}")
+        return False
+
 def fetch_data(entity_id: str, config: Dict[str, Any]) -> Optional[List[Dict[str, Any]]]:
     """Fetch data for a specific entity ID using the provided configuration."""
     url = f"{config['api_url']}?{config['id_param']}={entity_id}"
     
     try:
-        logger.info(f"Fetching {config['data_type']} data for {config['id_param']} {entity_id}...")
-        with urllib.request.urlopen(url) as response:
-            data = json.loads(response.read())
+        logger.info(f"Fetching {config['data_type']} data for {config['id_param']} {entity_id}...", url)
+        
+        # Add a small delay to avoid overwhelming the API
+        time.sleep(REQUEST_DELAY)
+        
+        # Create request with proper headers
+        req = urllib.request.Request(url)
+        # req.add_header('User-Agent', 'Mozilla/5.0 (compatible; bus-data-collector/1.0)')
+        # req.add_header('Accept', 'application/json, text/html, */*')
+        
+        with urllib.request.urlopen(req, timeout=30) as response:
+            content = response.read().decode('utf-8')
+            
+            # Check if we got an empty response
+            logger.warning(f"URl open")
+
+            if not content.strip():
+                logger.warning(f"Empty response for {config['id_param']} {entity_id}")
+                return []
+            
+            # Handle different response formats
+            if config.get('response_format') == 'html':
+                # Parse HTML table format for stop events
+                if not HTML_PARSER_AVAILABLE:
+                    logger.error("HTML parser not available - cannot process stop events data")
+                    return None
+                
+                data = parse_stop_events_html(content, entity_id)
+                
+                # Validate and format the parsed data
+                validated_data = []
+                for record in data:
+                    if validate_stop_event_record(record):
+                        formatted_record = format_stop_event_for_output(record)
+                        validated_data.append(formatted_record)
+                    else:
+                        logger.warning(f"Skipping invalid stop event record for vehicle {entity_id}")
+                
+                data = validated_data
+            else:
+                # Parse JSON format for breadcrumbs
+                try:
+                    data = json.loads(content)
+                    # Handle case where API returns a single object instead of array
+                    if isinstance(data, dict):
+                        data = [data]
+                    elif not isinstance(data, list):
+                        logger.warning(f"Unexpected data format for {entity_id}: {type(data)}")
+                        return []
+                except json.JSONDecodeError as e:
+                    logger.error(f"JSON decode error for {entity_id}: {e}")
+                    logger.debug(f"Raw content (first 500 chars): {content[:500]}")
+                    return None
+            
             logger.info(f"Received {len(data)} records for {config['id_param']} {entity_id}")
             return data
+            
+    except urllib.error.HTTPError as e:
+        if e.code == 404:
+            logger.warning(f"No {config['data_type']} data found for {config['id_param']} {entity_id} (HTTP 404) - this is normal if vehicle is not active")
+            return []  # Return empty list instead of None for 404s
+        else:
+            logger.error(f"HTTP Error fetching {config['data_type']} data for {config['id_param']} {entity_id}: {e.code} - {e.reason}")
+            return None
+    except urllib.error.URLError as e:
+        logger.error(f"URL Error fetching {config['data_type']} data for {config['id_param']} {entity_id}: {e.reason}")
+        return None
     except Exception as e:
-        logger.error(f"Error fetching {config['data_type']} data for {config['id_param']} {entity_id}: {e}")
+        logger.error(f"Unexpected error fetching {config['data_type']} data for {config['id_param']} {entity_id}: {type(e).__name__} - {e}")
+        logger.debug(f"Traceback: {traceback.format_exc()}")
         return None
 
 def save_raw_data(entity_id: str, data: List[Dict[str, Any]], config: Dict[str, Any]) -> None:
@@ -122,7 +222,7 @@ def save_raw_data(entity_id: str, data: List[Dict[str, Any]], config: Dict[str, 
     
     try:
         with open(filename, 'w') as f:
-            json.dump(data, f, indent=2)
+            json.dump(data, f, indent=2, default=str)  # default=str handles datetime objects
         
         logger.info(f"Saved raw {config['data_type']} data for {entity_id} to {filename}")
     except Exception as e:
@@ -134,7 +234,7 @@ def publish_to_pubsub(records: List[Dict[str, Any]], config: Dict[str, Any]) -> 
     Returns a tuple of (published_count, error_count).
     """
     if not records:
-        logger.warning(f"No {config['data_type']} records to publish to Pub/Sub")
+        logger.info(f"No {config['data_type']} records to publish to Pub/Sub - no data available for this entity")
         return 0, 0
     
     # Initialize Pub/Sub publisher
@@ -150,35 +250,40 @@ def publish_to_pubsub(records: List[Dict[str, Any]], config: Dict[str, Any]) -> 
         
         # Create a batch of publish futures
         for record in records:
-            # Add metadata to the record
-            record_with_metadata = {
-                **record,
-                "data_type": config['data_type'],
-                "collection_timestamp": datetime.datetime.now().isoformat()
-            }
-            
-            # Convert the record to a JSON string
-            data = json.dumps(record_with_metadata).encode("utf-8")
-            
-            # Publish the message and keep track of the future
-            future = publisher.publish(topic_path, data=data)
-            futures.append(future)
-            
-            # If we've reached our batch size, wait for them to complete
-            if len(futures) >= PUBSUB_BATCH_SIZE:
-                for future in futures:
-                    try:
-                        future.result()  # Wait for the future to complete
-                        published_count += 1
-                    except Exception as e:
-                        error_count += 1
-                        logger.error(f"Error publishing {config['data_type']} message: {type(e).__name__} - {str(e)}")
-                futures = []  # Clear the futures list for the next batch
+            try:
+                # Add metadata to the record
+                record_with_metadata = {
+                    **record,
+                    "data_type": config['data_type'],
+                    "collection_timestamp": datetime.datetime.now().isoformat()
+                }
+                
+                # Convert the record to a JSON string
+                data = json.dumps(record_with_metadata, default=str).encode("utf-8")
+                
+                # Publish the message and keep track of the future
+                future = publisher.publish(topic_path, data=data)
+                futures.append(future)
+                
+                # If we've reached our batch size, wait for them to complete
+                if len(futures) >= PUBSUB_BATCH_SIZE:
+                    for future in futures:
+                        try:
+                            future.result(timeout=30)  # Wait for the future to complete with timeout
+                            published_count += 1
+                        except Exception as e:
+                            error_count += 1
+                            logger.error(f"Error publishing {config['data_type']} message: {type(e).__name__} - {str(e)}")
+                    futures = []  # Clear the futures list for the next batch
+                    
+            except Exception as e:
+                error_count += 1
+                logger.error(f"Error preparing {config['data_type']} message for publishing: {type(e).__name__} - {str(e)}")
         
         # Process any remaining futures
         for future in futures:
             try:
-                future.result()
+                future.result(timeout=30)
                 published_count += 1
             except Exception as e:
                 error_count += 1
@@ -206,8 +311,13 @@ def process_entity(entity_id: str, config: Dict[str, Any]) -> Tuple[str, int, in
     # Fetch data
     data = fetch_data(entity_id, config)
     
-    if not data:
-        logger.warning(f"No {config['data_type']} data received for {config['id_param']} {entity_id}")
+    if data is None:
+        # Error occurred during fetching (non-404 errors)
+        logger.warning(f"Skipping Pub/Sub publishing for {config['id_param']} {entity_id} due to fetch error")
+        return entity_id, 0, 1
+    elif not data:
+        # No data returned (empty list) - this includes 404s and empty responses
+        logger.info(f"No {config['data_type']} data to publish for {config['id_param']} {entity_id} - entity may be inactive or have no current data")
         return entity_id, 0, 0
     
     # Save the raw data
@@ -234,8 +344,27 @@ def main() -> None:
         default=MAX_WORKERS,
         help=f'Maximum number of parallel workers (default: {MAX_WORKERS})'
     )
+    parser.add_argument(
+        '--test-api',
+        action='store_true',
+        help='Test API endpoint accessibility before processing'
+    )
+    parser.add_argument(
+        '--limit',
+        type=int,
+        help='Limit the number of entities to process (for testing)'
+    )
+    parser.add_argument(
+        '--debug',
+        action='store_true',
+        help='Enable debug logging for detailed troubleshooting'
+    )
     
     args = parser.parse_args()
+    
+    # Enable debug logging if requested
+    if args.debug:
+        logging.getLogger('bus_data_collector').setLevel(logging.DEBUG)
     
     start_time = datetime.datetime.now()
     logger.info(f"Starting {args.data_type} data collection at {start_time}")
@@ -243,11 +372,25 @@ def main() -> None:
     # Get configuration for the specified data type
     config = get_config(args.data_type)
     
+    # Test API endpoint if requested
+    if args.test_api:
+        if not test_api_endpoint(config):
+            logger.error("API endpoint test failed. Exiting.")
+            return
+    
     # Get appropriate IDs for the data type
     entity_ids = get_ids_for_data_type(args.data_type, config)
     
+    # Limit entities if specified
+    if args.limit:
+        entity_ids = entity_ids[:args.limit]
+        logger.info(f"Limited processing to first {args.limit} entities")
+    
     total_published = 0
     total_errors = 0
+    successful_entities = 0
+    no_data_count = 0
+    fetch_error_count = 0
     
     # Process entities in parallel using ThreadPoolExecutor
     with concurrent.futures.ThreadPoolExecutor(max_workers=args.max_workers) as executor:
@@ -261,14 +404,57 @@ def main() -> None:
                 _, published_count, error_count = future.result()
                 total_published += published_count
                 total_errors += error_count
+                
+                if published_count > 0:
+                    successful_entities += 1
+                elif error_count > 0:
+                    fetch_error_count += 1
+                else:
+                    no_data_count += 1
             except Exception as e:
                 logger.error(f"Error processing {config['id_param']} {entity_id}: {e}")
+                total_errors += 1
+                fetch_error_count += 1
     
     end_time = datetime.datetime.now()
     duration = (end_time - start_time).total_seconds()
     logger.info(f"{args.data_type.title()} data collection completed at {end_time}")
     logger.info(f"Total duration: {duration:.2f} seconds")
     logger.info(f"Total published: {total_published}, Total errors: {total_errors}")
+    logger.info(f"Successful entities: {successful_entities}/{len(entity_ids)}")
+    
+    # Simple breakdown of results
+    logger.info(f"Results breakdown:")
+    logger.info(f"  - Entities with data: {successful_entities}")
+    logger.info(f"  - Entities with no data (404s): {no_data_count}")
+    logger.info(f"  - Entities with errors: {fetch_error_count}")
+    
+    # If nothing published, explain why
+    if total_published == 0:
+        logger.warning("⚠️  ZERO RECORDS PUBLISHED!")
+        if no_data_count == len(entity_ids):
+            logger.warning("   Reason: ALL vehicle IDs returned 404 (no data found)")
+            logger.warning("   This means: Vehicles are inactive or don't exist")
+        elif fetch_error_count > 0:
+            logger.warning(f"   Reason: {fetch_error_count} entities had network/API errors")
+        
+        logger.warning("   Quick fix: Try running with --data-type breadcrumb instead")
+        logger.warning(f"   Test manually: curl '{config['api_url']}?{config['id_param']}=2909'")
 
 if __name__ == "__main__":
+    import os
+    import certifi
+
+
+    def set_ssl_environment():
+        # Set certificate bundle path
+        cert_path = certifi.where()
+        os.environ['SSL_CERT_FILE'] = cert_path
+        os.environ['REQUESTS_CA_BUNDLE'] = cert_path
+        os.environ['CURL_CA_BUNDLE'] = cert_path
+
+        print(f"Set SSL environment variables to: {cert_path}")
+
+
+    set_ssl_environment()
     main()
