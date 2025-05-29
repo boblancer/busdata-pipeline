@@ -16,5 +16,4 @@ busdata/
 # Environment files
 .env
 
-breadcrumbs_2025-05-29.jsonl
-stop_2025-05-29.jsonl
+.jsonl
