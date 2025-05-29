@@ -60,9 +60,9 @@ DATA_COLLECTION_CONFIGS = {
     },
     "stopevents": {
         "api_url": "https://busdata.cs.pdx.edu/api/getStopEvents",
-        "pubsub_topic": "stop-events-topic",
+        "pubsub_topic": "stop-data-topic",
         "use_vehicle_ids": True,
-        "id_param": "vehicle_id",
+        "id_param": "vehicle_num",
         "data_type": "stopevents",
         "response_format": "html"  # Assuming stop events return HTML
     }
@@ -143,20 +143,22 @@ def fetch_data(entity_id: str, config: Dict[str, Any]) -> Optional[List[Dict[str
     url = f"{config['api_url']}?{config['id_param']}={entity_id}"
     
     try:
-        logger.info(f"Fetching {config['data_type']} data for {config['id_param']} {entity_id}...")
+        logger.info(f"Fetching {config['data_type']} data for {config['id_param']} {entity_id}...", url)
         
         # Add a small delay to avoid overwhelming the API
         time.sleep(REQUEST_DELAY)
         
         # Create request with proper headers
         req = urllib.request.Request(url)
-        req.add_header('User-Agent', 'Mozilla/5.0 (compatible; bus-data-collector/1.0)')
-        req.add_header('Accept', 'application/json, text/html, */*')
+        # req.add_header('User-Agent', 'Mozilla/5.0 (compatible; bus-data-collector/1.0)')
+        # req.add_header('Accept', 'application/json, text/html, */*')
         
         with urllib.request.urlopen(req, timeout=30) as response:
             content = response.read().decode('utf-8')
             
             # Check if we got an empty response
+            logger.warning(f"URl open")
+
             if not content.strip():
                 logger.warning(f"Empty response for {config['id_param']} {entity_id}")
                 return []
@@ -440,4 +442,19 @@ def main() -> None:
         logger.warning(f"   Test manually: curl '{config['api_url']}?{config['id_param']}=2909'")
 
 if __name__ == "__main__":
+    import os
+    import certifi
+
+
+    def set_ssl_environment():
+        # Set certificate bundle path
+        cert_path = certifi.where()
+        os.environ['SSL_CERT_FILE'] = cert_path
+        os.environ['REQUESTS_CA_BUNDLE'] = cert_path
+        os.environ['CURL_CA_BUNDLE'] = cert_path
+
+        print(f"Set SSL environment variables to: {cert_path}")
+
+
+    set_ssl_environment()
     main()

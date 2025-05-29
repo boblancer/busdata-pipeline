@@ -1,0 +1,20 @@
+# IDE files
+.idea/
+
+# Python cache files
+__pycache__/
+**/__pycache__/
+*.pyc
+*.pyo
+
+# Data directory
+busdata/
+
+# Log files
+*.log
+
+# Environment files
+.env
+
+breadcrumbs_2025-05-29.jsonl
+stop_2025-05-29.jsonl
