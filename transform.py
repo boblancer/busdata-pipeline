@@ -276,7 +276,7 @@ def process_day_file(date_str, logger, clear_existing=True):
                 batch = breadcrumb_data[i:i+batch_size]
                 try:
                     cursor.execute("SAVEPOINT before_batch_insert")
-                    execute_values(cursor, breadcrumb_insert_query, batch)
+                    execute_values(cursor, breadcrumb_insert_query, batch,page_size=1000)
                     rows_inserted = cursor.rowcount
                     total_inserted += rows_inserted
                     cursor.execute("RELEASE SAVEPOINT before_batch_insert")
