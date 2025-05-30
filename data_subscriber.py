@@ -195,7 +195,7 @@ def main(subscription_name=None, data_type=None):
         while True:
             try:
                 # Non-blocking check with timeout
-                streaming_pull_future.result(timeout=60)
+                streaming_pull_future.result(timeout=600)
                 break
             except TimeoutError:
                 # Log periodic stats
