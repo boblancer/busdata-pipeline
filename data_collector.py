@@ -36,7 +36,7 @@ logger = logging.getLogger('bus_data_collector')
 
 # Base configuration
 PROJECT_ID = os.environ.get("GOOGLE_CLOUD_PROJECT", "dataeng-456707")
-OUTPUT_DIR = "./busdata/raw_data"
+OUTPUT_DIR = "./raw_data"
 MAX_WORKERS = 5  # Reduced to be gentler on the API
 PUBSUB_BATCH_SIZE = 100  # Number of messages to publish in batch
 REQUEST_DELAY = 0.1  # Small delay between requests to avoid overwhelming the API
@@ -53,7 +53,7 @@ DATA_COLLECTION_CONFIGS = {
     },
     "stopevents": {
         "api_url": "https://busdata.cs.pdx.edu/api/getStopEvents",
-        "pubsub_topic": "trip-route-mapping-topic",
+        "pubsub_topic": "stop-data-topic",
         "use_vehicle_ids": True,
         "id_param": "vehicle_num",
         "data_type": "trip_route_mapping",
