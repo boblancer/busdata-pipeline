@@ -1,0 +1,149 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>TriMet Bus Data Visualization</title>
+    <meta name="viewport" content="initial-scale=1,maximum-scale=1,user-scalable=no">
+    
+    <!-- Mapbox GL JS CSS and JavaScript -->
+    <link href="https://api.mapbox.com/mapbox-gl-js/v3.12.0/mapbox-gl.css" rel="stylesheet">
+    <script src="https://api.mapbox.com/mapbox-gl-js/v3.12.0/mapbox-gl.js"></script>
+    
+    <style>
+        body { 
+            margin: 0; 
+            padding: 0; 
+            font-family: Arial, sans-serif;
+        }
+        #map { 
+            position: absolute; 
+            top: 0; 
+            bottom: 0; 
+            width: 100%; 
+        }
+        .map-overlay {
+            position: absolute;
+            top: 0;
+            left: 0;
+            background: rgba(255, 255, 255, 0.9);
+            margin: 10px;
+            padding: 10px;
+            border-radius: 5px;
+            z-index: 1;
+        }
+    </style>
+</head>
+<body>
+    <div id="map"></div>
+    
+    <!-- Info overlay -->
+    <div class="map-overlay">
+        <h3>Bus Trip Visualization</h3>
+        <p>Speed: <span id="speed-info">Click on a point</span></p>
+    </div>
+
+    <script>
+        // YOUR ACCESS TOKEN HERE - Replace with your actual token
+        mapboxgl.accessToken = 'pk.eyJ1IjoiamFuZWthciIsImEiOiJjbWJhZzBkODgxMzV6MnBvZDBwNDBjYWo3In0.0AvpPSAjZw42PCmQC644fw';
+        
+        // Create the map centered on Portland
+        const map = new mapboxgl.Map({
+            container: 'map',
+            style: 'mapbox://styles/mapbox/streets-v12', // Basic street map
+            center: [-122.6587, 45.5152], // Portland, OR coordinates
+            zoom: 12
+        });
+
+        // Wait for map to load
+        map.on('load', function() {
+            
+            // ADD YOUR GEOJSON DATA HERE
+            // Replace with your actual GeoJSON filename
+            fetch('v55.geojson')
+                .then(response => response.json())
+                .then(data => {
+                    
+                    // Add the data source
+                    map.addSource('bus-trip', {
+                        'type': 'geojson',
+                        'data': data
+                    });
+
+                    // Add points layer - colored by speed
+                    map.addLayer({
+                        'id': 'bus-points',
+                        'type': 'circle',
+                        'source': 'bus-trip',
+                        'paint': {
+                            // Color points based on speed
+                            'circle-color': [
+                                'interpolate',
+                                ['linear'],
+                                ['get', 'speed'], // Get speed from properties
+                                0, '#3366cc',     // Blue for slow/stopped
+                                5, '#66cc33',     // Green for medium speed
+                                15, '#ffcc00',    // Yellow for faster
+                                25, '#ff6600',    // Orange for fast
+                                35, '#ff0000'     // Red for very fast
+                            ],
+                            'circle-radius': 6,
+                            'circle-stroke-width': 1,
+                            'circle-stroke-color': '#ffffff'
+                        }
+                    });
+
+                    // Add line layer to connect the points
+                    map.addLayer({
+                        'id': 'bus-route',
+                        'type': 'line',
+                        'source': 'bus-trip',
+                        'layout': {
+                            'line-join': 'round',
+                            'line-cap': 'round'
+                        },
+                        'paint': {
+                            'line-color': '#0066cc',
+                            'line-width': 3,
+                            'line-opacity': 0.7
+                        }
+                    });
+
+                    // Add click event to show speed info
+                    map.on('click', 'bus-points', function(e) {
+                        const speed = e.features[0].properties.speed;
+                        document.getElementById('speed-info').textContent = speed + ' m/s';
+                        
+                        // Add popup
+                        new mapboxgl.Popup()
+                            .setLngLat(e.lngLat)
+                            .setHTML(`<strong>Speed: ${speed} m/s</strong>`)
+                            .addTo(map);
+                    });
+
+                    // Change cursor to pointer when hovering over points
+                    map.on('mouseenter', 'bus-points', function() {
+                        map.getCanvas().style.cursor = 'pointer';
+                    });
+
+                    map.on('mouseleave', 'bus-points', function() {
+                        map.getCanvas().style.cursor = '';
+                    });
+
+                    // Fit map to show all data points
+                    const coordinates = data.features.map(feature => feature.geometry.coordinates);
+                    const bounds = coordinates.reduce(function(bounds, coord) {
+                        return bounds.extend(coord);
+                    }, new mapboxgl.LngLatBounds(coordinates[0], coordinates[0]));
+                    
+                    map.fitBounds(bounds, {
+                        padding: 50
+                    });
+                })
+                .catch(error => {
+                    console.error('Error loading GeoJSON:', error);
+                    alert('Could not load bus data. Make sure your-data.geojson file exists!');
+                });
+        });
+    </script>
+</body>
+</html>
