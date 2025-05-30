@@ -53,10 +53,10 @@ DATA_COLLECTION_CONFIGS = {
     },
     "stopevents": {
         "api_url": "https://busdata.cs.pdx.edu/api/getStopEvents",
-        "pubsub_topic": "stop-data-topic",
+        "pubsub_topic": "trip-route-mapping-topic",
         "use_vehicle_ids": True,
         "id_param": "vehicle_num",
-        "data_type": "stopevents",
+        "data_type": "trip_route_mapping",
         "response_format": "html"
     }
 }
@@ -93,8 +93,8 @@ def extract_trip_route_mapping(html_content):
 
 def parse_stop_events_html(html_content: str, vehicle_id: str):
     """
-    Parse HTML table into list of stop event records.
-    Simple parser that extracts basic stop event data.
+    Parse HTML to extract only trip_id - route_number pairs.
+    Returns a list of trip-route mapping records.
     """
     try:
         # Extract date from HTML
@@ -103,70 +103,22 @@ def parse_stop_events_html(html_content: str, vehicle_id: str):
         
         # Get trip-route mappings
         trip_route_pairs = extract_trip_route_mapping(html_content)
-        trip_route_map = {trip_id: route_id for trip_id, route_id in trip_route_pairs}
         
         logger.info(f"Found {len(trip_route_pairs)} trip-route mappings for vehicle {vehicle_id}")
         
+        # Convert to records with metadata
         all_records = []
+        for trip_id, route_number in trip_route_pairs:
+            record = {
+                'trip_id': trip_id,
+                'route_number': route_number,
+                'vehicle_id': vehicle_id,
+                'data_date': data_date,
+                'data_type': 'trip_route_mapping'
+            }
+            all_records.append(record)
         
-        # Find all trip sections
-        trip_sections = re.split(r'<h2>Stop events for PDX_TRIP\s+(\d+)</h2>', html_content)
-        
-        # Process each trip section
-        for i in range(1, len(trip_sections), 2):
-            if i + 1 >= len(trip_sections):
-                break
-                
-            trip_id = int(trip_sections[i])
-            table_content = trip_sections[i + 1]
-            
-            # Get route number from our mapping
-            route_number = trip_route_map.get(trip_id)
-            if not route_number:
-                logger.warning(f"No route number found for trip {trip_id}")
-                continue
-            
-            # Find table headers
-            header_match = re.search(r'<tr>\s*<th>(.*?)</tr>', table_content, re.DOTALL)
-            if not header_match:
-                continue
-                
-            # Extract column headers
-            headers = re.findall(r'<th>(.*?)</th>', header_match.group(0))
-            
-            # Find all data rows
-            data_rows = re.findall(r'<tr>\s*<td>(.*?)</tr>', table_content, re.DOTALL)
-            
-            for row in data_rows:
-                # Extract cell values
-                cells = re.findall(r'<td[^>]*>(.*?)</td>', '<td>' + row)
-                
-                if len(cells) >= len(headers):
-                    # Create record from cells and headers
-                    record = {}
-                    for j, header in enumerate(headers):
-                        if j < len(cells):
-                            record[header] = cells[j].strip()
-                    
-                    # Add metadata
-                    record['trip_id'] = str(trip_id)
-                    record['route_number'] = str(route_number)
-                    record['data_date'] = data_date
-                    record['vehicle_id'] = vehicle_id
-                    record['data_type'] = 'stopevents'
-                    
-                    # Convert numeric fields
-                    numeric_fields = ['ons', 'offs', 'dwell', 'estimated_load', 'maximum_speed']
-                    for field in numeric_fields:
-                        if field in record:
-                            try:
-                                record[field] = int(float(record[field])) if record[field] else 0
-                            except (ValueError, TypeError):
-                                record[field] = 0
-                    
-                    all_records.append(record)
-        
-        logger.info(f"Parsed {len(all_records)} stop event records for vehicle {vehicle_id}")
+        logger.info(f"Created {len(all_records)} trip-route mapping records for vehicle {vehicle_id}")
         return all_records
         
     except Exception as e:
@@ -175,8 +127,8 @@ def parse_stop_events_html(html_content: str, vehicle_id: str):
         return []
 
 def validate_stop_event_record(record):
-    """Check if record has required fields."""
-    required = ['vehicle_number', 'location_id', 'trip_id']
+    """Check if trip-route mapping record has required fields."""
+    required = ['trip_id', 'route_number', 'vehicle_id']
     return all(record.get(field) for field in required)
 
 def format_stop_event_for_output(record):
