@@ -18,17 +18,10 @@ import traceback
 import argparse
 import concurrent.futures
 import time
+import re
 from google.cloud import pubsub_v1
 from google.cloud.pubsub_v1.publisher.futures import Future as PublishFuture
 from typing import List, Dict, Any, Optional, Tuple
-
-# Import HTML parsing functions
-try:
-    from stop_html_parser import parse_stop_events_html, validate_stop_event_record, format_stop_event_for_output
-    HTML_PARSER_AVAILABLE = True
-except ImportError:
-    HTML_PARSER_AVAILABLE = False
-    logging.warning("HTML parser module not available - stop events parsing will be disabled")
 
 # Set up logging configuration
 logging.basicConfig(
@@ -64,12 +57,135 @@ DATA_COLLECTION_CONFIGS = {
         "use_vehicle_ids": True,
         "id_param": "vehicle_num",
         "data_type": "stopevents",
-        "response_format": "html"  # Assuming stop events return HTML
+        "response_format": "html"
     }
 }
 
 # Ensure output directory exists
 os.makedirs(OUTPUT_DIR, exist_ok=True)
+
+def extract_trip_route_mapping(html_content):
+    """
+    Extract [trip_id, route_id] pairs from HTML content.
+    Simple parser for stop events HTML data.
+    """
+    trip_route_pairs = []
+    
+    # Find all trip headers with their trip IDs
+    trip_matches = re.finditer(r'<h2>Stop events for PDX_TRIP\s+(\d+)</h2>', html_content)
+    
+    for match in trip_matches:
+        trip_id = int(match.group(1))
+        start_pos = match.end()
+        
+        # Find the next table after this header
+        # Look for the route number in the first data row (4th column)
+        table_match = re.search(r'<table>.*?<tr><td.*?</td><td.*?</td><td.*?</td><td.*?>(\d+)</td>', 
+                               html_content[start_pos:], re.DOTALL)
+        
+        if table_match:
+            route_number = int(table_match.group(1))
+            trip_route_pairs.append([trip_id, route_number])
+        else:
+            logger.warning(f"Could not find route number for trip {trip_id}")
+    
+    return trip_route_pairs
+
+def parse_stop_events_html(html_content: str, vehicle_id: str):
+    """
+    Parse HTML table into list of stop event records.
+    Simple parser that extracts basic stop event data.
+    """
+    try:
+        # Extract date from HTML
+        date_match = re.search(r'(\d{4}-\d{2}-\d{2})', html_content)
+        data_date = date_match.group(1) if date_match else datetime.datetime.now().strftime('%Y-%m-%d')
+        
+        # Get trip-route mappings
+        trip_route_pairs = extract_trip_route_mapping(html_content)
+        trip_route_map = {trip_id: route_id for trip_id, route_id in trip_route_pairs}
+        
+        logger.info(f"Found {len(trip_route_pairs)} trip-route mappings for vehicle {vehicle_id}")
+        
+        all_records = []
+        
+        # Find all trip sections
+        trip_sections = re.split(r'<h2>Stop events for PDX_TRIP\s+(\d+)</h2>', html_content)
+        
+        # Process each trip section
+        for i in range(1, len(trip_sections), 2):
+            if i + 1 >= len(trip_sections):
+                break
+                
+            trip_id = int(trip_sections[i])
+            table_content = trip_sections[i + 1]
+            
+            # Get route number from our mapping
+            route_number = trip_route_map.get(trip_id)
+            if not route_number:
+                logger.warning(f"No route number found for trip {trip_id}")
+                continue
+            
+            # Find table headers
+            header_match = re.search(r'<tr>\s*<th>(.*?)</tr>', table_content, re.DOTALL)
+            if not header_match:
+                continue
+                
+            # Extract column headers
+            headers = re.findall(r'<th>(.*?)</th>', header_match.group(0))
+            
+            # Find all data rows
+            data_rows = re.findall(r'<tr>\s*<td>(.*?)</tr>', table_content, re.DOTALL)
+            
+            for row in data_rows:
+                # Extract cell values
+                cells = re.findall(r'<td[^>]*>(.*?)</td>', '<td>' + row)
+                
+                if len(cells) >= len(headers):
+                    # Create record from cells and headers
+                    record = {}
+                    for j, header in enumerate(headers):
+                        if j < len(cells):
+                            record[header] = cells[j].strip()
+                    
+                    # Add metadata
+                    record['trip_id'] = str(trip_id)
+                    record['route_number'] = str(route_number)
+                    record['data_date'] = data_date
+                    record['vehicle_id'] = vehicle_id
+                    record['data_type'] = 'stopevents'
+                    
+                    # Convert numeric fields
+                    numeric_fields = ['ons', 'offs', 'dwell', 'estimated_load', 'maximum_speed']
+                    for field in numeric_fields:
+                        if field in record:
+                            try:
+                                record[field] = int(float(record[field])) if record[field] else 0
+                            except (ValueError, TypeError):
+                                record[field] = 0
+                    
+                    all_records.append(record)
+        
+        logger.info(f"Parsed {len(all_records)} stop event records for vehicle {vehicle_id}")
+        return all_records
+        
+    except Exception as e:
+        logger.error(f"Error parsing HTML for vehicle {vehicle_id}: {e}")
+        logger.debug(f"Traceback: {traceback.format_exc()}")
+        return []
+
+def validate_stop_event_record(record):
+    """Check if record has required fields."""
+    required = ['vehicle_number', 'location_id', 'trip_id']
+    return all(record.get(field) for field in required)
+
+def format_stop_event_for_output(record):
+    """Clean up record for output."""
+    # Ensure we have all required fields
+    if 'collection_timestamp' not in record:
+        record['collection_timestamp'] = datetime.datetime.now().isoformat()
+    
+    return record
 
 def get_config(data_type: str) -> Dict[str, Any]:
     """Get configuration for the specified data type."""
@@ -143,22 +259,19 @@ def fetch_data(entity_id: str, config: Dict[str, Any]) -> Optional[List[Dict[str
     url = f"{config['api_url']}?{config['id_param']}={entity_id}"
     
     try:
-        logger.info(f"Fetching {config['data_type']} data for {config['id_param']} {entity_id}...", url)
+        logger.info(f"Fetching {config['data_type']} data for {config['id_param']} {entity_id}...")
         
         # Add a small delay to avoid overwhelming the API
         time.sleep(REQUEST_DELAY)
         
         # Create request with proper headers
         req = urllib.request.Request(url)
-        # req.add_header('User-Agent', 'Mozilla/5.0 (compatible; bus-data-collector/1.0)')
-        # req.add_header('Accept', 'application/json, text/html, */*')
+        req.add_header('User-Agent', 'Mozilla/5.0 (compatible; bus-data-collector/1.0)')
         
         with urllib.request.urlopen(req, timeout=30) as response:
             content = response.read().decode('utf-8')
             
             # Check if we got an empty response
-            logger.warning(f"URl open")
-
             if not content.strip():
                 logger.warning(f"Empty response for {config['id_param']} {entity_id}")
                 return []
@@ -166,10 +279,6 @@ def fetch_data(entity_id: str, config: Dict[str, Any]) -> Optional[List[Dict[str
             # Handle different response formats
             if config.get('response_format') == 'html':
                 # Parse HTML table format for stop events
-                if not HTML_PARSER_AVAILABLE:
-                    logger.error("HTML parser not available - cannot process stop events data")
-                    return None
-                
                 data = parse_stop_events_html(content, entity_id)
                 
                 # Validate and format the parsed data
@@ -179,7 +288,7 @@ def fetch_data(entity_id: str, config: Dict[str, Any]) -> Optional[List[Dict[str
                         formatted_record = format_stop_event_for_output(record)
                         validated_data.append(formatted_record)
                     else:
-                        logger.warning(f"Skipping invalid stop event record for vehicle {entity_id}")
+                        logger.debug(f"Skipping invalid stop event record for vehicle {entity_id}")
                 
                 data = validated_data
             else:
@@ -251,15 +360,14 @@ def publish_to_pubsub(records: List[Dict[str, Any]], config: Dict[str, Any]) -> 
         # Create a batch of publish futures
         for record in records:
             try:
-                # Add metadata to the record
-                record_with_metadata = {
-                    **record,
-                    "data_type": config['data_type'],
-                    "collection_timestamp": datetime.datetime.now().isoformat()
-                }
+                # Add metadata to the record if not already present
+                if 'collection_timestamp' not in record:
+                    record['collection_timestamp'] = datetime.datetime.now().isoformat()
+                if 'data_type' not in record:
+                    record['data_type'] = config['data_type']
                 
                 # Convert the record to a JSON string
-                data = json.dumps(record_with_metadata, default=str).encode("utf-8")
+                data = json.dumps(record, default=str).encode("utf-8")
                 
                 # Publish the message and keep track of the future
                 future = publisher.publish(topic_path, data=data)
@@ -445,16 +553,13 @@ if __name__ == "__main__":
     import os
     import certifi
 
-
     def set_ssl_environment():
         # Set certificate bundle path
         cert_path = certifi.where()
         os.environ['SSL_CERT_FILE'] = cert_path
         os.environ['REQUESTS_CA_BUNDLE'] = cert_path
         os.environ['CURL_CA_BUNDLE'] = cert_path
-
         print(f"Set SSL environment variables to: {cert_path}")
-
 
     set_ssl_environment()
     main()
