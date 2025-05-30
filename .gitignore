@@ -14,6 +14,5 @@ busdata/
 *.log
 
 # Environment files
-.env
-
 *.jsonl
+
