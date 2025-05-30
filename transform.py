@@ -268,7 +268,7 @@ def process_day_file(date_str, logger, clear_existing=True):
                 ON CONFLICT DO NOTHING
             '''
             # Insert in batches of 1000 to avoid memory issues
-            batch_size = 1000
+            batch_size = 5000
             total_inserted = 0
             errors = 0
             
