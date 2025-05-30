@@ -85,9 +85,7 @@ def remove_existing_data(date_str, conn, cursor, logger):
 # Function to process a specific JSONL file
 def process_day_file(date_str, logger, clear_existing=True):
     # Construct file path based on the date
-    # file_path = f"/opt/busdata/output/breadcrumbs_{date_str}.jsonl"
-    file_path = f"/opt/busdata/output/gg.jsonl"
-
+    file_path = f"/opt/busdata/output/breadcrumbs_{date_str}.jsonl"
     
     # Check if file exists
     if not os.path.exists(file_path):

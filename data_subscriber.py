@@ -113,21 +113,6 @@ def process_message(message):
         # Negative acknowledgement - the message will be redelivered
         message.nack()
 
-def run_transformation(date_str):
-    """Run transformation for the specified date."""
-    logger.info(f"Starting transformation for {date_str}...")
-    
-    try:
-        # Import the transform module
-        import transform
-        
-        # Run the transformation
-        transform.main(date_str, logger)
-        
-        logger.info(f"Transformation completed for {date_str}")
-    except Exception as e:
-        logger.error(f"Error during transformation for {date_str}: {e}", exc_info=True)
-
 
 def main(subscription_name=None):
     """Main function to receive and process messages from Pub/Sub."""
@@ -165,9 +150,6 @@ def main(subscription_name=None):
         for date_str, file_handle in daily_files.items():
             file_handle.close()
             logger.info(f"Closed file for {date_str}")
-            
-            # Run transformation for each date
-            run_transformation(date_str)
         
         # Close the subscriber client
         subscriber.close()
@@ -204,4 +186,3 @@ if __name__ == "__main__":
         
         # Run transformation for current date as fallback
         current_date_str = datetime.datetime.now().strftime("%Y-%m-%d")
-        run_transformation(current_date_str)
