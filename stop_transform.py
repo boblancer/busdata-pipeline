@@ -81,6 +81,11 @@ def update_trip_routes(trip_route_mappings, logger):
         logger.warning("No trip-route mappings to update")
         return
     
+    #Prepare update data as list of tuples (route_number, trip_id)
+    # route_number from JSONL will become route_id in the Trip table
+    update_data = [(route_number, trip_id) for trip_id, route_number in trip_route_mappings.items()]
+        
+    logger.info(update_data)
     conn = None
     try:
         conn = psycopg2.connect(**db_params)
@@ -88,9 +93,6 @@ def update_trip_routes(trip_route_mappings, logger):
         cursor = conn.cursor()
         logger.info("Connected to PostgreSQL database")
         
-        # Prepare update data as list of tuples (route_number, trip_id)
-        # route_number from JSONL will become route_id in the Trip table
-        update_data = [(route_number, trip_id) for trip_id, route_number in trip_route_mappings.items()]
         
         logger.info(f"Updating {len(update_data)} trip records with route information")
         
@@ -172,7 +174,7 @@ def main(file_path=None, logger=None):
             level=logging.INFO,
             format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
             handlers=[
-                logging.FileHandler("/opt/busdata/route_updater.log"),
+                logging.FileHandler("./route_updater.log"),
                 logging.StreamHandler()
             ]
         )
@@ -187,6 +189,7 @@ def main(file_path=None, logger=None):
     # Process the file and extract mappings
     trip_route_mappings = process_stop_events_file(file_path, logger)
     
+    logger.info("Updating trips....")
     if trip_route_mappings:
         # Update the database
         update_trip_routes(trip_route_mappings, logger)
