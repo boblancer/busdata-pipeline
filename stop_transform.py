@@ -31,7 +31,8 @@ def process_stop_events_file(file_path, logger):
     
     logger.info(f"Processing stop events file: {file_path}")
     
-    # Dictionary to store trip_id -> route_id mappings
+    # Dictionary to store trip_id -> route_number mappings
+    # route_number from JSONL will become route_id in database
     # Use dict to automatically eliminate duplicates
     trip_route_mappings = {}
     
@@ -52,10 +53,11 @@ def process_stop_events_file(file_path, logger):
                 if trip_id and route_number:
                     try:
                         trip_id_int = int(trip_id)
-                        route_id_int = int(route_number)
+                        route_number_int = int(route_number)
                         
-                        # Store mapping (dict automatically handles duplicates)
-                        trip_route_mappings[trip_id_int] = route_id_int
+                        # Store mapping: trip_id -> route_number
+                        # route_number will become route_id in the database
+                        trip_route_mappings[trip_id_int] = route_number_int
                         valid_records += 1
                         
                     except ValueError:
@@ -86,8 +88,9 @@ def update_trip_routes(trip_route_mappings, logger):
         cursor = conn.cursor()
         logger.info("Connected to PostgreSQL database")
         
-        # Prepare update data as list of tuples (route_id, trip_id)
-        update_data = [(route_id, trip_id) for trip_id, route_id in trip_route_mappings.items()]
+        # Prepare update data as list of tuples (route_number, trip_id)
+        # route_number from JSONL will become route_id in the Trip table
+        update_data = [(route_number, trip_id) for trip_id, route_number in trip_route_mappings.items()]
         
         logger.info(f"Updating {len(update_data)} trip records with route information")
         
@@ -97,10 +100,11 @@ def update_trip_routes(trip_route_mappings, logger):
         errors = 0
         
         # SQL for updating route_id where trip_id matches
+        # Note: route_number from JSONL becomes route_id in database
         update_query = """
             UPDATE Trip 
-            SET route_id = data.route_id 
-            FROM (VALUES %s) AS data(route_id, trip_id) 
+            SET route_id = data.route_number 
+            FROM (VALUES %s) AS data(route_number, trip_id) 
             WHERE Trip.trip_id = data.trip_id
         """
         
