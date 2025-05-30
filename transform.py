@@ -268,7 +268,7 @@ def process_day_file(date_str, logger, clear_existing=True):
                 ON CONFLICT DO NOTHING
             '''
             # Insert in batches of 1000 to avoid memory issues
-            batch_size = 5000
+            batch_size = 3000
             total_inserted = 0
             errors = 0
             
@@ -276,7 +276,7 @@ def process_day_file(date_str, logger, clear_existing=True):
                 batch = breadcrumb_data[i:i+batch_size]
                 try:
                     cursor.execute("SAVEPOINT before_batch_insert")
-                    execute_values(cursor, breadcrumb_insert_query, batch,page_size=1000)
+                    execute_values(cursor, breadcrumb_insert_query, batch,page_size=3000)
                     rows_inserted = cursor.rowcount
                     total_inserted += rows_inserted
                     cursor.execute("RELEASE SAVEPOINT before_batch_insert")
